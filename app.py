@@ -275,6 +275,75 @@ def admin_project_delete(project_id):
     return redirect(url_for('admin_projects'))
 
 
+# ---------- Сводная информация ----------
+
+@app.route('/summary')
+@login_required
+def summary():
+    week_start = current_week_start()
+    users = User.query.filter_by(active=True).order_by(User.username).all()
+    projects = Project.query.filter_by(active=True).order_by(Project.name).all()
+    entries = Participation.query.filter_by(week_start=week_start).all()
+    matrix = {(e.user_id, e.project_id): e for e in entries}
+    totals = {u.id: 0 for u in users}
+    for e in entries:
+        totals[e.user_id] = totals.get(e.user_id, 0) + e.percent
+    return render_template('summary.html', users=users, projects=projects,
+                           matrix=matrix, totals=totals, week_start=week_start,
+                           week_end=week_start + timedelta(days=6))
+
+
+@app.route('/admin/entries', methods=['POST'])
+@admin_required
+def admin_add_entry():
+    """Админ вводит/меняет % занятости за любого пользователя."""
+    week_start = current_week_start()
+    user_id = request.form.get('user_id', type=int)
+    project_id = request.form.get('project_id', type=int)
+    percent = request.form.get('percent', type=int)
+    user = db.session.get(User, user_id) if user_id else None
+    project = db.session.get(Project, project_id) if project_id else None
+
+    if user is None or project is None or not project.active:
+        flash('Пользователь или проект не найдены.', 'danger')
+    elif percent is None or not (0 < percent <= 100):
+        flash('Процент должен быть от 1 до 100.', 'danger')
+    else:
+        entry = Participation.query.filter_by(
+            user_id=user.id, project_id=project.id,
+            week_start=week_start).first()
+        others = sum(e.percent for e in Participation.query.filter_by(
+            user_id=user.id, week_start=week_start).all()
+            if not entry or e.id != entry.id)
+        if others + percent > 100:
+            flash(f'Сумма по неделе для {user.username} не может превышать '
+                  f'100% (уже занято {others}%).', 'danger')
+        else:
+            if entry:
+                entry.percent = percent
+                flash(f'Обновлено: {user.username} / {project.name} — {percent}%.',
+                      'success')
+            else:
+                db.session.add(Participation(user_id=user.id,
+                                             project_id=project.id,
+                                             week_start=week_start,
+                                             percent=percent))
+                flash(f'Добавлено: {user.username} / {project.name} — {percent}%.',
+                      'success')
+            db.session.commit()
+    return redirect(url_for('summary'))
+
+
+@app.route('/admin/entries/<int:entry_id>/delete', methods=['POST'])
+@admin_required
+def admin_delete_entry(entry_id):
+    entry = db.session.get(Participation, entry_id) or abort(404)
+    db.session.delete(entry)
+    db.session.commit()
+    flash('Запись удалена.', 'info')
+    return redirect(url_for('summary'))
+
+
 # ---------- Инициализация ----------
 
 def init_db():
