@@ -13,6 +13,7 @@
     {% if current_user.is_authenticated %}
     <div class="navbar-nav me-auto">
       <a class="nav-link" href="{{ url_for('dashboard') }}">Моя неделя</a>
+      <a class="nav-link" href="{{ url_for('summary') }}">Сводка</a>
       {% if current_user.is_admin %}
       <a class="nav-link" href="{{ url_for('admin_users') }}">Пользователи</a>
       <a class="nav-link" href="{{ url_for('admin_projects') }}">Проекты</a>
