@@ -57,6 +57,17 @@ def planned_week():
     return current_week_start() + timedelta(days=7)
 
 
+def selected_week():
+    """Неделя, выбранная пользователем (?week=YYYY-MM-DD — любая дата недели).
+    По умолчанию — текущая отчётная неделя."""
+    raw = request.values.get('week', '')
+    try:
+        d = date.fromisoformat(raw)
+        return d - timedelta(days=d.weekday())
+    except ValueError:
+        return current_week_start()
+
+
 # ---------- Аутентификация ----------
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -113,8 +124,8 @@ def logout():
 @app.route('/')
 @login_required
 def dashboard():
-    fact_week = current_week_start()
-    plan_week = planned_week()
+    fact_week = selected_week()
+    plan_week = fact_week + timedelta(days=7)
     fact_entries = (Participation.query
                     .filter_by(user_id=current_user.id, week_start=fact_week,
                                kind='fact')
@@ -133,12 +144,15 @@ def dashboard():
         plan_remaining=sum(e.percent for e in plan_entries),
         fact_week=fact_week, plan_week=plan_week,
         fact_week_end=fact_week + timedelta(days=6),
-        plan_week_end=plan_week + timedelta(days=6))
+        plan_week_end=plan_week + timedelta(days=6),
+        week=fact_week.isoformat(),
+        prev_week=(fact_week - timedelta(days=7)).isoformat(),
+        next_week=(fact_week + timedelta(days=7)).isoformat())
 
 
-def _save_entry(user_id, project_id, percent, kind):
+def _save_entry(user_id, project_id, percent, kind, fact_week):
     """Общая валидация и upsert записи. Возвращает (ok, message, category)."""
-    week = current_week_start() if kind == 'fact' else planned_week()
+    week = fact_week if kind == 'fact' else fact_week + timedelta(days=7)
     project = db.session.get(Project, project_id) if project_id else None
     if project is None or not project.active:
         return False, 'Проект не найден.', 'danger'
@@ -166,47 +180,50 @@ def _save_entry(user_id, project_id, percent, kind):
 @app.route('/fact/copy', methods=['POST'])
 @login_required
 def copy_fact():
-    """Копирование плана текущей недели в её факт (для себя)."""
-    count, skipped = _copy_plan_to_fact(current_user.id)
+    """Копирование плана выбранной недели в её факт (для себя)."""
+    week = selected_week()
+    count, skipped = _copy_plan_to_fact(current_user.id, week)
     msg = f'Скопировано из плана в факт: {count}.'
     if skipped:
         msg += f' Пропущено: {skipped} (уже есть или превысило бы 100%).'
     flash(msg, 'info')
-    return redirect(url_for('dashboard'))
+    return redirect(url_for('dashboard', week=week.isoformat()))
 
 
 @app.route('/entries', methods=['POST'])
 @login_required
 def add_entry():
+    week = selected_week()
     ok, msg, cat = _save_entry(current_user.id,
                                request.form.get('project_id', type=int),
-                               request.form.get('percent', type=int), 'fact')
+                               request.form.get('percent', type=int), 'fact', week)
     flash(msg, cat)
-    return redirect(url_for('dashboard'))
+    return redirect(url_for('dashboard', week=week.isoformat()))
 
 
 @app.route('/plan', methods=['POST'])
 @login_required
 def add_plan():
+    week = selected_week()
     ok, msg, cat = _save_entry(current_user.id,
                                request.form.get('project_id', type=int),
-                               request.form.get('percent', type=int), 'plan')
+                               request.form.get('percent', type=int), 'plan', week)
     flash(msg, cat)
-    return redirect(url_for('dashboard'))
+    return redirect(url_for('dashboard', week=week.isoformat()))
 
 
 @app.route('/plan/copy', methods=['POST'])
 @login_required
 def copy_plan():
-    """Копирование факта отчётной недели в план следующей (для себя)."""
-    count = _copy_fact_to_plan(current_user.id)
+    """Копирование факта выбранной недели в план следующей (для себя)."""
+    week = selected_week()
+    count = _copy_fact_to_plan(current_user.id, week)
     flash(f'Скопировано записей: {count}. Уже существующие не тронуты.', 'info')
-    return redirect(url_for('dashboard'))
+    return redirect(url_for('dashboard', week=week.isoformat()))
 
 
-def _copy_fact_to_plan(user_id):
-    fact_week = current_week_start()
-    plan_week = planned_week()
+def _copy_fact_to_plan(user_id, fact_week):
+    plan_week = fact_week + timedelta(days=7)
     facts = Participation.query.filter_by(user_id=user_id, week_start=fact_week,
                                           kind='fact').all()
     count = 0
@@ -223,13 +240,12 @@ def _copy_fact_to_plan(user_id):
     return count
 
 
-def _copy_plan_to_fact(user_id):
+def _copy_plan_to_fact(user_id, week):
     """Копирование плана текущей (отчётной) недели в её факт.
 
-    План текущей недели заполнялся ранее (когда она была «следующей»),
-    поэтому ищем записи kind='plan' с week_start = текущий понедельник.
+    План недели заполнялся ранее (когда она была «следующей»),
+    поэтому ищем записи kind='plan' с week_start = понедельник выбранной недели.
     """
-    week = current_week_start()
     plans = Participation.query.filter_by(user_id=user_id, week_start=week,
                                           kind='plan').all()
     count, skipped = 0, 0
@@ -262,7 +278,7 @@ def delete_entry(entry_id):
     db.session.delete(entry)
     db.session.commit()
     flash('Запись удалена.', 'info')
-    return redirect(url_for('dashboard'))
+    return redirect(url_for('dashboard', week=request.form.get('week', '')))
 
 
 # ---------- Сводная информация ----------
@@ -270,8 +286,8 @@ def delete_entry(entry_id):
 @app.route('/summary')
 @login_required
 def summary():
-    fact_week = current_week_start()
-    plan_week = planned_week()
+    fact_week = selected_week()
+    plan_week = fact_week + timedelta(days=7)
     entries = Participation.query.filter(
         Participation.week_start.in_([fact_week, plan_week])).all()
     matrix = {}
@@ -295,7 +311,10 @@ def summary():
                            plan_totals=plan_totals, fact_week=fact_week,
                            fact_week_end=fact_week + timedelta(days=6),
                            plan_week=plan_week,
-                           plan_week_end=plan_week + timedelta(days=6))
+                           plan_week_end=plan_week + timedelta(days=6),
+                           week=fact_week.isoformat(),
+                           prev_week=(fact_week - timedelta(days=7)).isoformat(),
+                           next_week=(fact_week + timedelta(days=7)).isoformat())
 
 
 @app.route('/admin/fact/copy', methods=['POST'])
@@ -303,15 +322,16 @@ def summary():
 def admin_copy_fact():
     """Админ копирует план текущей недели в её факт за выбранного пользователя."""
     user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    week = selected_week()
     if user is None:
         flash('Пользователь не найден.', 'danger')
     else:
-        count, skipped = _copy_plan_to_fact(user.id)
+        count, skipped = _copy_plan_to_fact(user.id, week)
         msg = f'{user.username}: скопировано из плана в факт — {count}.'
         if skipped:
             msg += f' Пропущено: {skipped}.'
         flash(msg, 'info')
-    return redirect(url_for('summary'))
+    return redirect(url_for('summary', week=week.isoformat()))
 
 
 @app.route('/admin/entries', methods=['POST'])
@@ -322,27 +342,29 @@ def admin_add_entry():
     if kind not in KIND_LABELS:
         kind = 'fact'
     user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    week = selected_week()
     if user is None:
         flash('Пользователь не найден.', 'danger')
     else:
         ok, msg, cat = _save_entry(user.id,
                                    request.form.get('project_id', type=int),
-                                   request.form.get('percent', type=int), kind)
+                                   request.form.get('percent', type=int), kind, week)
         flash(f'{user.username}: {msg}', cat)
-    return redirect(url_for('summary'))
+    return redirect(url_for('summary', week=week.isoformat()))
 
 
 @app.route('/admin/plan/copy', methods=['POST'])
 @admin_required
 def admin_copy_plan():
-    """Админ копирует факт отчётной недели в план следующей за выбранного пользователя."""
+    """Админ копирует факт выбранной недели в план следующей за выбранного пользователя."""
     user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    week = selected_week()
     if user is None:
         flash('Пользователь не найден.', 'danger')
     else:
-        count = _copy_fact_to_plan(user.id)
+        count = _copy_fact_to_plan(user.id, week)
         flash(f'{user.username}: скопировано записей — {count}.', 'info')
-    return redirect(url_for('summary'))
+    return redirect(url_for('summary', week=week.isoformat()))
 
 
 @app.route('/admin/entries/<int:entry_id>/delete', methods=['POST'])
@@ -352,7 +374,7 @@ def admin_delete_entry(entry_id):
     db.session.delete(entry)
     db.session.commit()
     flash('Запись удалена.', 'info')
-    return redirect(url_for('summary'))
+    return redirect(url_for('summary', week=request.form.get('week', '')))
 
 
 # ---------- Помесячный факт ----------

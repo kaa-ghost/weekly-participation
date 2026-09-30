@@ -2,6 +2,18 @@
 {% block title %}Сводка по неделе{% endblock %}
 {% block content %}
 <h4>Сводная занятость</h4>
+
+<form method="get" class="row g-2 align-items-end mb-2">
+  <div class="col-md-3">
+    <label class="form-label">Отчётная неделя</label>
+    <input type="date" name="week" value="{{ week }}" class="form-control">
+  </div>
+  <div class="col-md-2"><button class="btn btn-primary w-100">Показать</button></div>
+  <div class="col-md-4 d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="{{ url_for('summary', week=prev_week) }}">← неделя</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('summary', week=next_week) }}">неделя →</a>
+  </div>
+</form>
 <p class="text-muted">Факт: {{ fact_week.strftime('%d.%m.%Y') }} — {{ fact_week_end.strftime('%d.%m.%Y') }}
   · План: {{ plan_week.strftime('%d.%m.%Y') }} — {{ plan_week_end.strftime('%d.%m.%Y') }}</p>
 
@@ -10,6 +22,7 @@
   <div class="card-body">
     <h6 class="card-title">Внести данные (от имени администратора)</h6>
     <form method="post" action="{{ url_for('admin_add_entry') }}" class="row g-2 align-items-end">
+      <input type="hidden" name="week" value="{{ week }}">
       <div class="col-md-3">
         <label class="form-label">Пользователь</label>
         <select name="user_id" class="form-select" required>
@@ -17,11 +30,11 @@
           {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-2">
         <label class="form-label">Тип</label>
         <select name="kind" class="form-select" required>
-          <option value="fact" selected>Факт (тек. неделя)</option>
-          <option value="plan">План (след. неделя)</option>
+          <option value="fact" selected>Факт</option>
+          <option value="plan">План</option>
         </select>
       </div>
       <div class="col-md-3">
@@ -39,31 +52,47 @@
         <button class="btn btn-primary w-100">Сохранить</button>
       </div>
     </form>
-    <form method="post" action="{{ url_for('admin_copy_plan') }}" class="row g-2 align-items-end mt-3">
-      <div class="col-md-4">
-        <label class="form-label">Скопировать факт → план для пользователя</label>
-        <select name="user_id" class="form-select" required>
-          <option value="" selected disabled>— выберите —</option>
-          {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="col-md-2">
-        <button class="btn btn-outline-primary w-100">Копировать</button>
-      </div>
-    </form>
-    <form method="post" action="{{ url_for('admin_copy_fact') }}" class="row g-2 align-items-end mt-2">
-      <div class="col-md-4">
-        <select name="user_id" class="form-select" required>
-          <option value="" selected disabled>— выберите пользователя —</option>
+
+    <hr style="border-color: var(--border);">
+
+    <h6 class="card-title">Копирование для пользователя</h6>
+    <div class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label">Пользователь</label>
+        <select id="copyUser" class="form-select">
+          <option value="" selected>— выберите —</option>
           {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-md-3">
-        <button class="btn btn-outline-secondary w-100">План недели → факт</button>
+        <form method="post" action="{{ url_for('admin_copy_fact') }}" id="formP2F">
+          <input type="hidden" name="week" value="{{ week }}">
+          <input type="hidden" name="user_id" id="p2fUser">
+          <button class="btn btn-outline-primary w-100" id="btnP2F" disabled
+                  title="Скопировать план выбранной недели в её факт">План → факт</button>
+        </form>
       </div>
-    </form>
+      <div class="col-md-3">
+        <form method="post" action="{{ url_for('admin_copy_plan') }}" id="formF2P">
+          <input type="hidden" name="week" value="{{ week }}">
+          <input type="hidden" name="user_id" id="f2pUser">
+          <button class="btn btn-outline-primary w-100" id="btnF2P" disabled
+                  title="Скопировать факт выбранной недели в план следующей">Факт → план</button>
+        </form>
+      </div>
+    </div>
   </div>
 </div>
+
+<script>
+document.getElementById('copyUser').addEventListener('change', function () {
+  const v = this.value;
+  document.getElementById('p2fUser').value = v;
+  document.getElementById('f2pUser').value = v;
+  document.getElementById('btnP2F').disabled = !v;
+  document.getElementById('btnF2P').disabled = !v;
+});
+</script>
 {% endif %}
 
 {% if not projects %}
@@ -71,7 +100,7 @@
 {% else %}
 <div class="table-responsive">
 <table class="table table-bordered table-sm align-middle text-center">
-  <thead class="table-light">
+  <thead>
     <tr>
       <th class="text-start" rowspan="2">Пользователь</th>
       {% for p in projects %}
@@ -82,7 +111,7 @@
     <tr>
       {% for p in projects %}
       <th class="text-primary border-start">План</th>
-      <th class="text-secondary">Факт</th>
+      <th class="text-success">Факт</th>
       {% endfor %}
     </tr>
   </thead>
@@ -100,6 +129,7 @@
               {% if current_user.is_admin %}
               <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
                     onsubmit="return confirm('Удалить план {{ u.username }} / {{ p.name }}?')">
+                <input type="hidden" name="week" value="{{ week }}">
                 <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Удалить">×</button>
               </form>
               {% endif %}
@@ -114,6 +144,7 @@
               {% if current_user.is_admin %}
               <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
                     onsubmit="return confirm('Удалить факт {{ u.username }} / {{ p.name }}?')">
+                <input type="hidden" name="week" value="{{ week }}">
                 <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Удалить">×</button>
               </form>
               {% endif %}
