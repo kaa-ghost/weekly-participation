@@ -1,58 +1,101 @@
 {% extends "base.html" %}
 {% block title %}Моя неделя{% endblock %}
 {% block content %}
-<h4>Моя занятость на неделе</h4>
-<p class="text-muted">{{ week_start.strftime('%d.%m.%Y') }} — {{ week_end.strftime('%d.%m.%Y') }}</p>
+<h4>Моя занятость</h4>
 
-<div class="card mb-4">
+<div class="card mb-4 border-secondary">
+  <div class="card-header fw-bold">Факт — текущая неделя
+    ({{ fact_week.strftime('%d.%m.%Y') }} — {{ fact_week_end.strftime('%d.%m.%Y') }})</div>
   <div class="card-body">
-    {% if remaining >= 100 %}
-      <div class="alert alert-success mb-0">Неделя заполнена полностью (100%).</div>
+    <form method="post" action="{{ url_for('copy_fact') }}" class="mb-3">
+      <button class="btn btn-outline-secondary btn-sm">⧉ Скопировать план текущей недели в факт</button>
+      <small class="text-muted d-block mt-1">Записи, которые уже есть в факте или превысили бы 100%, пропускаются.</small>
+    </form>
+    {% if fact_remaining >= 100 %}
+      <div class="alert alert-success mb-3">Неделя заполнена полностью (100%).</div>
     {% else %}
-    <form method="post" action="{{ url_for('add_entry') }}" class="row g-2 align-items-end">
+    <form method="post" action="{{ url_for('add_entry') }}" class="row g-2 align-items-end mb-3">
       <div class="col-md-6">
-        <label class="form-label">Проект</label>
         <select name="project_id" class="form-select" required>
-          <option value="" selected disabled>— выберите проект —</option>
+          <option value="" selected disabled>— проект —</option>
           {% for p in projects %}
-            {% if p.id not in used_ids %}<option value="{{ p.id }}">{{ p.name }}</option>{% endif %}
+            {% if p.id not in fact_used %}<option value="{{ p.id }}">{{ p.name }}</option>{% endif %}
           {% endfor %}
         </select>
       </div>
       <div class="col-md-3">
-        <label class="form-label">% занятости</label>
-        <input type="number" name="percent" min="1" max="{{ 100 - remaining }}"
-               class="form-control" required>
+        <input type="number" name="percent" min="1" max="{{ 100 - fact_remaining }}"
+               class="form-control" placeholder="%" required>
       </div>
-      <div class="col-md-3">
-        <button class="btn btn-primary w-100">Добавить</button>
-      </div>
+      <div class="col-md-3"><button class="btn btn-primary w-100">Добавить факт</button></div>
     </form>
-    <small class="text-muted">Осталось распределить: {{ 100 - remaining }}%</small>
     {% endif %}
+    {% if fact_entries %}
+    <table class="table table-sm table-striped align-middle mb-1">
+      <tbody>
+      {% for e in fact_entries %}
+        <tr>
+          <td>{{ e.project.name }}</td><td class="text-end" style="width:80px;">{{ e.percent }}%</td>
+          <td class="text-end" style="width:90px;">
+            <form method="post" action="{{ url_for('delete_entry', entry_id=e.id) }}"
+                  onsubmit="return confirm('Удалить запись?')">
+              <button class="btn btn-outline-danger btn-sm">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot><tr class="fw-bold"><td>Итого</td><td class="text-end">{{ fact_remaining }}%</td><td></td></tr></tfoot>
+    </table>
+    {% else %}<p class="text-muted mb-0">Фактов пока нет.</p>{% endif %}
   </div>
 </div>
 
-{% if entries %}
-<table class="table table-striped align-middle">
-  <thead><tr><th>Проект</th><th class="text-end">%</th><th></th></tr></thead>
-  <tbody>
-  {% for e in entries %}
-    <tr>
-      <td>{{ e.project.name }}</td>
-      <td class="text-end">{{ e.percent }}%</td>
-      <td class="text-end">
-        <form method="post" action="{{ url_for('delete_entry', entry_id=e.id) }}"
-              onsubmit="return confirm('Удалить запись?')">
-          <button class="btn btn-outline-danger btn-sm">Удалить</button>
-        </form>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-  <tfoot><tr class="fw-bold"><td>Итого</td><td class="text-end">{{ remaining }}%</td><td></td></tr></tfoot>
-</table>
-{% else %}
-<p class="text-muted">Записей на эту неделю пока нет.</p>
-{% endif %}
+<div class="card border-primary">
+  <div class="card-header fw-bold text-primary">План — следующая неделя
+    ({{ plan_week.strftime('%d.%m.%Y') }} — {{ plan_week_end.strftime('%d.%m.%Y') }})</div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('copy_plan') }}" class="mb-3">
+      <button class="btn btn-outline-primary btn-sm">⧉ Скопировать факт текущей недели в план</button>
+      <small class="text-muted d-block mt-1">Уже существующие записи плана не перезаписываются.</small>
+    </form>
+    {% if plan_remaining >= 100 %}
+      <div class="alert alert-success mb-3">План заполнен полностью (100%).</div>
+    {% else %}
+    <form method="post" action="{{ url_for('add_plan') }}" class="row g-2 align-items-end mb-3">
+      <div class="col-md-6">
+        <select name="project_id" class="form-select" required>
+          <option value="" selected disabled>— проект —</option>
+          {% for p in projects %}
+            {% if p.id not in plan_used %}<option value="{{ p.id }}">{{ p.name }}</option>{% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <input type="number" name="percent" min="1" max="{{ 100 - plan_remaining }}"
+               class="form-control" placeholder="%" required>
+      </div>
+      <div class="col-md-3"><button class="btn btn-primary w-100">Добавить в план</button></div>
+    </form>
+    {% endif %}
+    {% if plan_entries %}
+    <table class="table table-sm table-striped align-middle mb-1">
+      <tbody>
+      {% for e in plan_entries %}
+        <tr>
+          <td>{{ e.project.name }}</td><td class="text-end" style="width:80px;">{{ e.percent }}%</td>
+          <td class="text-end" style="width:90px;">
+            <form method="post" action="{{ url_for('delete_entry', entry_id=e.id) }}"
+                  onsubmit="return confirm('Удалить запись?')">
+              <button class="btn btn-outline-danger btn-sm">Удалить</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot><tr class="fw-bold"><td>Итого</td><td class="text-end">{{ plan_remaining }}%</td><td></td></tr></tfoot>
+    </table>
+    {% else %}<p class="text-muted mb-0">План не заполнен.</p>{% endif %}
+  </div>
+</div>
 {% endblock %}

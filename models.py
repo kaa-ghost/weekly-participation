@@ -47,16 +47,17 @@ class Participation(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id'), nullable=False)
     week_start = db.Column(db.Date, nullable=False, index=True)  # понедельник недели
-    percent = db.Column(db.Integer, nullable=False)              # 0..100
+    kind = db.Column(db.String(8), nullable=False, default='fact')  # fact | plan
+    percent = db.Column(db.Integer, nullable=False)               # 0..100
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     __table_args__ = (
-        db.UniqueConstraint('user_id', 'project_id', 'week_start',
-                            name='uq_user_project_week'),
+        db.UniqueConstraint('user_id', 'project_id', 'week_start', 'kind',
+                            name='uq_user_project_week_kind'),
     )
 
 
 def current_week_start(today=None):
-    """Понедельник текущей недели."""
+    """Понедельник текущей (отчётной) недели."""
     today = today or date.today()
     return today - timedelta(days=today.weekday())

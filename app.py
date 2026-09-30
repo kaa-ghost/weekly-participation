@@ -1,5 +1,6 @@
+import calendar
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 
 from flask import (Flask, abort, flash, redirect, render_template, request,
                    url_for)
@@ -18,6 +19,10 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Для доступа войдите в систему.'
 
+KIND_LABELS = {'fact': 'факт', 'plan': 'план'}
+MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+               'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -34,6 +39,22 @@ def admin_required(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def month_mondays(year, month):
+    """До 4 последних понедельников месяца (недели отчёта для помесячного факта)."""
+    first = date(year, month, 1)
+    monday = first if first.weekday() == 0 else first + timedelta(days=7 - first.weekday())
+    last = date(year, month, calendar.monthrange(year, month)[1])
+    result = []
+    while monday <= last:
+        result.append(monday)
+        monday += timedelta(days=7)
+    return result[-4:] if len(result) > 4 else result
+
+
+def planned_week():
+    return current_week_start() + timedelta(days=7)
 
 
 # ---------- Аутентификация ----------
@@ -87,58 +108,149 @@ def logout():
     return redirect(url_for('login'))
 
 
-# ---------- Кабинет пользователя ----------
+# ---------- Кабинет пользователя: факт и план ----------
 
 @app.route('/')
 @login_required
 def dashboard():
-    week_start = current_week_start()
-    week_end = week_start + timedelta(days=6)
-    entries = (Participation.query
-               .filter_by(user_id=current_user.id, week_start=week_start)
-               .join(Project)
-               .order_by(Project.name)
-               .all())
+    fact_week = current_week_start()
+    plan_week = planned_week()
+    fact_entries = (Participation.query
+                    .filter_by(user_id=current_user.id, week_start=fact_week,
+                               kind='fact')
+                    .join(Project).order_by(Project.name).all())
+    plan_entries = (Participation.query
+                    .filter_by(user_id=current_user.id, week_start=plan_week,
+                               kind='plan')
+                    .join(Project).order_by(Project.name).all())
     projects = Project.query.filter_by(active=True).order_by(Project.name).all()
-    used_ids = {e.project_id for e in entries}
-    remaining = sum(e.percent for e in entries)
-    return render_template('dashboard.html', entries=entries, projects=projects,
-                           used_ids=used_ids, remaining=remaining,
-                           week_start=week_start, week_end=week_end)
+    return render_template(
+        'dashboard.html',
+        fact_entries=fact_entries, plan_entries=plan_entries, projects=projects,
+        fact_used={e.project_id for e in fact_entries},
+        plan_used={e.project_id for e in plan_entries},
+        fact_remaining=sum(e.percent for e in fact_entries),
+        plan_remaining=sum(e.percent for e in plan_entries),
+        fact_week=fact_week, plan_week=plan_week,
+        fact_week_end=fact_week + timedelta(days=6),
+        plan_week_end=plan_week + timedelta(days=6))
+
+
+def _save_entry(user_id, project_id, percent, kind):
+    """Общая валидация и upsert записи. Возвращает (ok, message, category)."""
+    week = current_week_start() if kind == 'fact' else planned_week()
+    project = db.session.get(Project, project_id) if project_id else None
+    if project is None or not project.active:
+        return False, 'Проект не найден.', 'danger'
+    if percent is None or not (0 < percent <= 100):
+        return False, 'Процент должен быть от 1 до 100.', 'danger'
+    entry = Participation.query.filter_by(
+        user_id=user_id, project_id=project.id, week_start=week, kind=kind).first()
+    others = sum(e.percent for e in Participation.query.filter_by(
+        user_id=user_id, week_start=week, kind=kind).all()
+        if not entry or e.id != entry.id)
+    if others + percent > 100:
+        return False, (f'Сумма {KIND_LABELS[kind]}а по неделе не может превышать '
+                       f'100% (уже занято {others}%).'), 'danger'
+    if entry:
+        entry.percent = percent
+        action = 'Обновлено'
+    else:
+        db.session.add(Participation(user_id=user_id, project_id=project.id,
+                                     week_start=week, kind=kind, percent=percent))
+        action = 'Добавлено'
+    db.session.commit()
+    return True, f'{action}: {project.name} — {percent}% ({KIND_LABELS[kind]}).', 'success'
+
+
+@app.route('/fact/copy', methods=['POST'])
+@login_required
+def copy_fact():
+    """Копирование плана текущей недели в её факт (для себя)."""
+    count, skipped = _copy_plan_to_fact(current_user.id)
+    msg = f'Скопировано из плана в факт: {count}.'
+    if skipped:
+        msg += f' Пропущено: {skipped} (уже есть или превысило бы 100%).'
+    flash(msg, 'info')
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/entries', methods=['POST'])
 @login_required
 def add_entry():
-    week_start = current_week_start()
-    project_id = request.form.get('project_id', type=int)
-    percent = request.form.get('percent', type=int)
-    project = db.session.get(Project, project_id) if project_id else None
-
-    if project is None or not project.active:
-        flash('Проект не найден.', 'danger')
-    elif percent is None or not (0 < percent <= 100):
-        flash('Процент должен быть от 1 до 100.', 'danger')
-    else:
-        exists = Participation.query.filter_by(
-            user_id=current_user.id, project_id=project.id,
-            week_start=week_start).first()
-        if exists:
-            flash('По этому проекту запись уже есть — удалите её, чтобы изменить.', 'warning')
-        else:
-            used = sum(e.percent for e in Participation.query.filter_by(
-                user_id=current_user.id, week_start=week_start).all())
-            if used + percent > 100:
-                flash(f'Сумма по неделе не может превышать 100% '
-                      f'(уже занято {used}%).', 'danger')
-            else:
-                db.session.add(Participation(user_id=current_user.id,
-                                             project_id=project.id,
-                                             week_start=week_start,
-                                             percent=percent))
-                db.session.commit()
-                flash(f'Добавлено: {project.name} — {percent}%.', 'success')
+    ok, msg, cat = _save_entry(current_user.id,
+                               request.form.get('project_id', type=int),
+                               request.form.get('percent', type=int), 'fact')
+    flash(msg, cat)
     return redirect(url_for('dashboard'))
+
+
+@app.route('/plan', methods=['POST'])
+@login_required
+def add_plan():
+    ok, msg, cat = _save_entry(current_user.id,
+                               request.form.get('project_id', type=int),
+                               request.form.get('percent', type=int), 'plan')
+    flash(msg, cat)
+    return redirect(url_for('dashboard'))
+
+
+@app.route('/plan/copy', methods=['POST'])
+@login_required
+def copy_plan():
+    """Копирование факта отчётной недели в план следующей (для себя)."""
+    count = _copy_fact_to_plan(current_user.id)
+    flash(f'Скопировано записей: {count}. Уже существующие не тронуты.', 'info')
+    return redirect(url_for('dashboard'))
+
+
+def _copy_fact_to_plan(user_id):
+    fact_week = current_week_start()
+    plan_week = planned_week()
+    facts = Participation.query.filter_by(user_id=user_id, week_start=fact_week,
+                                          kind='fact').all()
+    count = 0
+    for f in facts:
+        exists = Participation.query.filter_by(
+            user_id=user_id, project_id=f.project_id,
+            week_start=plan_week, kind='plan').first()
+        if not exists:
+            db.session.add(Participation(user_id=user_id, project_id=f.project_id,
+                                         week_start=plan_week, kind='plan',
+                                         percent=f.percent))
+            count += 1
+    db.session.commit()
+    return count
+
+
+def _copy_plan_to_fact(user_id):
+    """Копирование плана текущей (отчётной) недели в её факт.
+
+    План текущей недели заполнялся ранее (когда она была «следующей»),
+    поэтому ищем записи kind='plan' с week_start = текущий понедельник.
+    """
+    week = current_week_start()
+    plans = Participation.query.filter_by(user_id=user_id, week_start=week,
+                                          kind='plan').all()
+    count, skipped = 0, 0
+    for pl in plans:
+        exists = Participation.query.filter_by(
+            user_id=user_id, project_id=pl.project_id,
+            week_start=week, kind='fact').first()
+        if exists:
+            skipped += 1
+            continue
+        used = sum(e.percent for e in Participation.query.filter_by(
+            user_id=user_id, week_start=week, kind='fact').all())
+        if used + pl.percent > 100:
+            skipped += 1  # превысило бы 100% — пропускаем
+            continue
+        db.session.add(Participation(user_id=user_id, project_id=pl.project_id,
+                                     week_start=week, kind='fact',
+                                     percent=pl.percent))
+        count += 1
+    db.session.commit()
+    return count, skipped
 
 
 @app.route('/entries/<int:entry_id>/delete', methods=['POST'])
@@ -151,6 +263,131 @@ def delete_entry(entry_id):
     db.session.commit()
     flash('Запись удалена.', 'info')
     return redirect(url_for('dashboard'))
+
+
+# ---------- Сводная информация ----------
+
+@app.route('/summary')
+@login_required
+def summary():
+    fact_week = current_week_start()
+    plan_week = planned_week()
+    entries = Participation.query.filter(
+        Participation.week_start.in_([fact_week, plan_week])).all()
+    matrix = {}
+    for e in entries:
+        cell = matrix.setdefault((e.user_id, e.project_id), {})
+        if e.week_start == fact_week and e.kind == 'fact':
+            cell['fact'] = e
+        elif e.week_start == plan_week and e.kind == 'plan':
+            cell['plan'] = e
+    users = User.query.filter_by(active=True).order_by(User.username).all()
+    projects = Project.query.filter_by(active=True).order_by(Project.name).all()
+    fact_totals = {u.id: 0 for u in users}
+    plan_totals = {u.id: 0 for u in users}
+    for (uid, pid), cell in matrix.items():
+        if 'fact' in cell:
+            fact_totals[uid] = fact_totals.get(uid, 0) + cell['fact'].percent
+        if 'plan' in cell:
+            plan_totals[uid] = plan_totals.get(uid, 0) + cell['plan'].percent
+    return render_template('summary.html', users=users, projects=projects,
+                           matrix=matrix, fact_totals=fact_totals,
+                           plan_totals=plan_totals, fact_week=fact_week,
+                           fact_week_end=fact_week + timedelta(days=6),
+                           plan_week=plan_week,
+                           plan_week_end=plan_week + timedelta(days=6))
+
+
+@app.route('/admin/fact/copy', methods=['POST'])
+@admin_required
+def admin_copy_fact():
+    """Админ копирует план текущей недели в её факт за выбранного пользователя."""
+    user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    if user is None:
+        flash('Пользователь не найден.', 'danger')
+    else:
+        count, skipped = _copy_plan_to_fact(user.id)
+        msg = f'{user.username}: скопировано из плана в факт — {count}.'
+        if skipped:
+            msg += f' Пропущено: {skipped}.'
+        flash(msg, 'info')
+    return redirect(url_for('summary'))
+
+
+@app.route('/admin/entries', methods=['POST'])
+@admin_required
+def admin_add_entry():
+    """Админ вводит/меняет факт или план за любого пользователя."""
+    kind = request.form.get('kind', 'fact')
+    if kind not in KIND_LABELS:
+        kind = 'fact'
+    user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    if user is None:
+        flash('Пользователь не найден.', 'danger')
+    else:
+        ok, msg, cat = _save_entry(user.id,
+                                   request.form.get('project_id', type=int),
+                                   request.form.get('percent', type=int), kind)
+        flash(f'{user.username}: {msg}', cat)
+    return redirect(url_for('summary'))
+
+
+@app.route('/admin/plan/copy', methods=['POST'])
+@admin_required
+def admin_copy_plan():
+    """Админ копирует факт отчётной недели в план следующей за выбранного пользователя."""
+    user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    if user is None:
+        flash('Пользователь не найден.', 'danger')
+    else:
+        count = _copy_fact_to_plan(user.id)
+        flash(f'{user.username}: скопировано записей — {count}.', 'info')
+    return redirect(url_for('summary'))
+
+
+@app.route('/admin/entries/<int:entry_id>/delete', methods=['POST'])
+@admin_required
+def admin_delete_entry(entry_id):
+    entry = db.session.get(Participation, entry_id) or abort(404)
+    db.session.delete(entry)
+    db.session.commit()
+    flash('Запись удалена.', 'info')
+    return redirect(url_for('summary'))
+
+
+# ---------- Помесячный факт ----------
+
+@app.route('/monthly')
+@login_required
+def monthly():
+    ym = request.args.get('month', '')
+    try:
+        year, month = map(int, ym.split('-'))
+        assert 1 <= month <= 12
+    except (ValueError, AssertionError):
+        today = date.today()
+        year, month = today.year, today.month
+    weeks = month_mondays(year, month)
+    entries = (Participation.query
+               .filter(Participation.kind == 'fact',
+                       Participation.week_start.in_(weeks)).all())
+    sums = {}
+    for e in entries:
+        key = (e.user_id, e.project_id)
+        sums[key] = sums.get(key, 0) + e.percent
+    avg = {k: round(v / 4) for k, v in sums.items()}  # недостающие недели = 0
+    users = User.query.filter_by(active=True).order_by(User.username).all()
+    projects = Project.query.filter_by(active=True).order_by(Project.name).all()
+    prev_month = date(year, month, 1) - timedelta(days=1)
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    return render_template('monthly.html', users=users, projects=projects,
+                           avg=avg, weeks=weeks, year=year, month=month,
+                           month_name=MONTH_NAMES[month - 1],
+                           prev_ym=f'{prev_month.year:04d}-{prev_month.month:02d}',
+                           next_ym=f'{next_month.year:04d}-{next_month.month:02d}')
 
 
 # ---------- Админка: пользователи ----------
@@ -275,85 +512,17 @@ def admin_project_delete(project_id):
     return redirect(url_for('admin_projects'))
 
 
-# ---------- Сводная информация ----------
-
-@app.route('/summary')
-@login_required
-def summary():
-    week_start = current_week_start()
-    users = User.query.filter_by(active=True).order_by(User.username).all()
-    projects = Project.query.filter_by(active=True).order_by(Project.name).all()
-    entries = Participation.query.filter_by(week_start=week_start).all()
-    matrix = {(e.user_id, e.project_id): e for e in entries}
-    totals = {u.id: 0 for u in users}
-    for e in entries:
-        totals[e.user_id] = totals.get(e.user_id, 0) + e.percent
-    return render_template('summary.html', users=users, projects=projects,
-                           matrix=matrix, totals=totals, week_start=week_start,
-                           week_end=week_start + timedelta(days=6))
-
-
-@app.route('/admin/entries', methods=['POST'])
-@admin_required
-def admin_add_entry():
-    """Админ вводит/меняет % занятости за любого пользователя."""
-    week_start = current_week_start()
-    user_id = request.form.get('user_id', type=int)
-    project_id = request.form.get('project_id', type=int)
-    percent = request.form.get('percent', type=int)
-    user = db.session.get(User, user_id) if user_id else None
-    project = db.session.get(Project, project_id) if project_id else None
-
-    if user is None or project is None or not project.active:
-        flash('Пользователь или проект не найдены.', 'danger')
-    elif percent is None or not (0 < percent <= 100):
-        flash('Процент должен быть от 1 до 100.', 'danger')
-    else:
-        entry = Participation.query.filter_by(
-            user_id=user.id, project_id=project.id,
-            week_start=week_start).first()
-        others = sum(e.percent for e in Participation.query.filter_by(
-            user_id=user.id, week_start=week_start).all()
-            if not entry or e.id != entry.id)
-        if others + percent > 100:
-            flash(f'Сумма по неделе для {user.username} не может превышать '
-                  f'100% (уже занято {others}%).', 'danger')
-        else:
-            if entry:
-                entry.percent = percent
-                flash(f'Обновлено: {user.username} / {project.name} — {percent}%.',
-                      'success')
-            else:
-                db.session.add(Participation(user_id=user.id,
-                                             project_id=project.id,
-                                             week_start=week_start,
-                                             percent=percent))
-                flash(f'Добавлено: {user.username} / {project.name} — {percent}%.',
-                      'success')
-            db.session.commit()
-    return redirect(url_for('summary'))
-
-
-@app.route('/admin/entries/<int:entry_id>/delete', methods=['POST'])
-@admin_required
-def admin_delete_entry(entry_id):
-    entry = db.session.get(Participation, entry_id) or abort(404)
-    db.session.delete(entry)
-    db.session.commit()
-    flash('Запись удалена.', 'info')
-    return redirect(url_for('summary'))
-
-
 # ---------- Инициализация ----------
 
 def init_db():
+    """Создаёт таблицы и администратора при старте (и под gunicorn тоже)."""
     db.create_all()
     if not User.query.filter_by(is_admin=True).first():
         admin = User(username='admin', is_admin=True)
         admin.set_password(os.environ.get('ADMIN_PASSWORD', 'admin'))
         db.session.add(admin)
         db.session.commit()
-        print('Создан администратор: admin / admin (смените пароль!)')
+        print('Создан администратор: admin (смените пароль!)')
 
 
 with app.app_context():  # выполняется и при импорте gunicorn'ом

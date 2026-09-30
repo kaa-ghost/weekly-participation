@@ -1,29 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Сводка по неделе{% endblock %}
 {% block content %}
-<h4>Сводная занятость за неделю</h4>
-<p class="text-muted">{{ week_start.strftime('%d.%m.%Y') }} — {{ week_end.strftime('%d.%m.%Y') }}</p>
+<h4>Сводная занятость</h4>
+<p class="text-muted">Факт: {{ fact_week.strftime('%d.%m.%Y') }} — {{ fact_week_end.strftime('%d.%m.%Y') }}
+  · План: {{ plan_week.strftime('%d.%m.%Y') }} — {{ plan_week_end.strftime('%d.%m.%Y') }}</p>
 
 {% if current_user.is_admin %}
 <div class="card mb-4">
   <div class="card-body">
     <h6 class="card-title">Внести данные (от имени администратора)</h6>
     <form method="post" action="{{ url_for('admin_add_entry') }}" class="row g-2 align-items-end">
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label class="form-label">Пользователь</label>
         <select name="user_id" class="form-select" required>
           <option value="" selected disabled>— выберите —</option>
           {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
         </select>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-3">
+        <label class="form-label">Тип</label>
+        <select name="kind" class="form-select" required>
+          <option value="fact" selected>Факт (тек. неделя)</option>
+          <option value="plan">План (след. неделя)</option>
+        </select>
+      </div>
+      <div class="col-md-3">
         <label class="form-label">Проект</label>
         <select name="project_id" class="form-select" required>
           <option value="" selected disabled>— выберите —</option>
           {% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
+      <div class="col-md-1">
         <label class="form-label">%</label>
         <input type="number" name="percent" min="1" max="100" class="form-control" required>
       </div>
@@ -31,7 +39,29 @@
         <button class="btn btn-primary w-100">Сохранить</button>
       </div>
     </form>
-    <small class="text-muted">Если запись по паре «пользователь + проект» уже есть — процент будет обновлён.</small>
+    <form method="post" action="{{ url_for('admin_copy_plan') }}" class="row g-2 align-items-end mt-3">
+      <div class="col-md-4">
+        <label class="form-label">Скопировать факт → план для пользователя</label>
+        <select name="user_id" class="form-select" required>
+          <option value="" selected disabled>— выберите —</option>
+          {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-outline-primary w-100">Копировать</button>
+      </div>
+    </form>
+    <form method="post" action="{{ url_for('admin_copy_fact') }}" class="row g-2 align-items-end mt-2">
+      <div class="col-md-4">
+        <select name="user_id" class="form-select" required>
+          <option value="" selected disabled>— выберите пользователя —</option>
+          {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-outline-secondary w-100">План недели → факт</button>
+      </div>
+    </form>
   </div>
 </div>
 {% endif %}
@@ -43,11 +73,17 @@
 <table class="table table-bordered table-sm align-middle text-center">
   <thead class="table-light">
     <tr>
-      <th class="text-start sticky-start">Пользователь</th>
+      <th class="text-start" rowspan="2">Пользователь</th>
       {% for p in projects %}
-      <th style="min-width: 90px;">{{ p.name }}</th>
+      <th colspan="2" class="border-start">{{ p.name }}</th>
       {% endfor %}
-      <th>Итого</th>
+      <th colspan="2" rowspan="2" class="border-start align-middle">Итого</th>
+    </tr>
+    <tr>
+      {% for p in projects %}
+      <th class="text-primary border-start">План</th>
+      <th class="text-secondary">Факт</th>
+      {% endfor %}
     </tr>
   </thead>
   <tbody>
@@ -55,26 +91,38 @@
     <tr>
       <th class="text-start">{{ u.username }}</th>
       {% for p in projects %}
-        {% set e = matrix.get((u.id, p.id)) %}
-        <td class="{{ 'table-success' if e else '' }}">
+        {% set cell = matrix.get((u.id, p.id), {}) %}
+        {% set e = cell.get('plan') %}
+        <td class="border-start {{ 'table-primary' if e else '' }}">
           {% if e %}
             <div class="d-flex flex-column align-items-center gap-1">
               <span class="fw-bold">{{ e.percent }}%</span>
               {% if current_user.is_admin %}
               <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
-                    onsubmit="return confirm('Удалить запись {{ u.username }} / {{ p.name }}?')">
+                    onsubmit="return confirm('Удалить план {{ u.username }} / {{ p.name }}?')">
                 <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Удалить">×</button>
               </form>
               {% endif %}
             </div>
-          {% else %}
-            <span class="text-muted">—</span>
-          {% endif %}
+          {% else %}<span class="text-muted">—</span>{% endif %}
+        </td>
+        {% set e = cell.get('fact') %}
+        <td class="{{ 'table-secondary' if e else '' }}">
+          {% if e %}
+            <div class="d-flex flex-column align-items-center gap-1">
+              <span class="fw-bold">{{ e.percent }}%</span>
+              {% if current_user.is_admin %}
+              <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
+                    onsubmit="return confirm('Удалить факт {{ u.username }} / {{ p.name }}?')">
+                <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Удалить">×</button>
+              </form>
+              {% endif %}
+            </div>
+          {% else %}<span class="text-muted">—</span>{% endif %}
         </td>
       {% endfor %}
-      <td class="fw-bold {{ 'text-success' if totals.get(u.id, 0) == 100 else 'text-warning' }}">
-        {{ totals.get(u.id, 0) }}%
-      </td>
+      <td class="fw-bold border-start {{ 'text-primary' if plan_totals.get(u.id, 0) == 100 }}">{{ plan_totals.get(u.id, 0) }}%</td>
+      <td class="fw-bold {{ 'text-success' if fact_totals.get(u.id, 0) == 100 else 'text-warning' }}">{{ fact_totals.get(u.id, 0) }}%</td>
     </tr>
   {% endfor %}
   </tbody>
