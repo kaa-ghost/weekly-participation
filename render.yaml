@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: weekly-participation
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app"
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        value: admin123  # смените перед первым запуском

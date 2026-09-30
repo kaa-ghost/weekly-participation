@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Пользователи{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Пользователи</h4>
+  <a class="btn btn-primary btn-sm" href="{{ url_for('admin_user_create') }}">+ Создать</a>
+</div>
+<table class="table table-striped align-middle">
+  <thead><tr><th>Логин</th><th>Роль</th><th>Статус</th><th></th></tr></thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <td>{{ u.username }}</td>
+      <td>{% if u.is_admin %}<span class="badge bg-dark">админ</span>{% else %}пользователь{% endif %}</td>
+      <td>{% if u.active %}<span class="badge bg-success">активен</span>{% else %}<span class="badge bg-secondary">блок</span>{% endif %}</td>
+      <td class="text-end">
+        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('admin_user_edit', user_id=u.id) }}">Изменить</a>
+        {% if u.id != current_user.id %}
+        <form method="post" class="d-inline" action="{{ url_for('admin_user_delete', user_id=u.id) }}"
+              onsubmit="return confirm('Удалить пользователя {{ u.username }}?')">
+          <button class="btn btn-outline-danger btn-sm">Удалить</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

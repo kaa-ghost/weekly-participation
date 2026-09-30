@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Моя неделя{% endblock %}
+{% block content %}
+<h4>Моя занятость на неделе</h4>
+<p class="text-muted">{{ week_start.strftime('%d.%m.%Y') }} — {{ week_end.strftime('%d.%m.%Y') }}</p>
+
+<div class="card mb-4">
+  <div class="card-body">
+    {% if remaining >= 100 %}
+      <div class="alert alert-success mb-0">Неделя заполнена полностью (100%).</div>
+    {% else %}
+    <form method="post" action="{{ url_for('add_entry') }}" class="row g-2 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label">Проект</label>
+        <select name="project_id" class="form-select" required>
+          <option value="" selected disabled>— выберите проект —</option>
+          {% for p in projects %}
+            {% if p.id not in used_ids %}<option value="{{ p.id }}">{{ p.name }}</option>{% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">% занятости</label>
+        <input type="number" name="percent" min="1" max="{{ 100 - remaining }}"
+               class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-primary w-100">Добавить</button>
+      </div>
+    </form>
+    <small class="text-muted">Осталось распределить: {{ 100 - remaining }}%</small>
+    {% endif %}
+  </div>
+</div>
+
+{% if entries %}
+<table class="table table-striped align-middle">
+  <thead><tr><th>Проект</th><th class="text-end">%</th><th></th></tr></thead>
+  <tbody>
+  {% for e in entries %}
+    <tr>
+      <td>{{ e.project.name }}</td>
+      <td class="text-end">{{ e.percent }}%</td>
+      <td class="text-end">
+        <form method="post" action="{{ url_for('delete_entry', entry_id=e.id) }}"
+              onsubmit="return confirm('Удалить запись?')">
+          <button class="btn btn-outline-danger btn-sm">Удалить</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr class="fw-bold"><td>Итого</td><td class="text-end">{{ remaining }}%</td><td></td></tr></tfoot>
+</table>
+{% else %}
+<p class="text-muted">Записей на эту неделю пока нет.</p>
+{% endif %}
+{% endblock %}
