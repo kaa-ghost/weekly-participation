@@ -287,7 +287,8 @@ def init_db():
         print('Создан администратор: admin / admin (смените пароль!)')
 
 
+with app.app_context():  # выполняется и при импорте gunicorn'ом
+    init_db()
+
 if __name__ == '__main__':
-    with app.app_context():
-        init_db()
     app.run(debug=True)
