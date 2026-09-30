@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Сводка по неделе{% endblock %}
+{% block content %}
+<h4>Сводная занятость за неделю</h4>
+<p class="text-muted">{{ week_start.strftime('%d.%m.%Y') }} — {{ week_end.strftime('%d.%m.%Y') }}</p>
+
+{% if current_user.is_admin %}
+<div class="card mb-4">
+  <div class="card-body">
+    <h6 class="card-title">Внести данные (от имени администратора)</h6>
+    <form method="post" action="{{ url_for('admin_add_entry') }}" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">Пользователь</label>
+        <select name="user_id" class="form-select" required>
+          <option value="" selected disabled>— выберите —</option>
+          {% for u in users %}<option value="{{ u.id }}">{{ u.username }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Проект</label>
+        <select name="project_id" class="form-select" required>
+          <option value="" selected disabled>— выберите —</option>
+          {% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">%</label>
+        <input type="number" name="percent" min="1" max="100" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-primary w-100">Сохранить</button>
+      </div>
+    </form>
+    <small class="text-muted">Если запись по паре «пользователь + проект» уже есть — процент будет обновлён.</small>
+  </div>
+</div>
+{% endif %}
+
+{% if not projects %}
+<div class="alert alert-info">Проектов пока нет — администратор может добавить их в разделе «Проекты».</div>
+{% else %}
+<div class="table-responsive">
+<table class="table table-bordered table-sm align-middle text-center">
+  <thead class="table-light">
+    <tr>
+      <th class="text-start sticky-start">Пользователь</th>
+      {% for p in projects %}
+      <th style="min-width: 90px;">{{ p.name }}</th>
+      {% endfor %}
+      <th>Итого</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <th class="text-start">{{ u.username }}</th>
+      {% for p in projects %}
+        {% set e = matrix.get((u.id, p.id)) %}
+        <td class="{{ 'table-success' if e else '' }}">
+          {% if e %}
+            <div class="d-flex flex-column align-items-center gap-1">
+              <span class="fw-bold">{{ e.percent }}%</span>
+              {% if current_user.is_admin %}
+              <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
+                    onsubmit="return confirm('Удалить запись {{ u.username }} / {{ p.name }}?')">
+                <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Удалить">×</button>
+              </form>
+              {% endif %}
+            </div>
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+      {% endfor %}
+      <td class="fw-bold {{ 'text-success' if totals.get(u.id, 0) == 100 else 'text-warning' }}">
+        {{ totals.get(u.id, 0) }}%
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
