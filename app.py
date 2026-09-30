@@ -1,9 +1,10 @@
 import calendar
+import io
 import os
 from datetime import date, timedelta
 
 from flask import (Flask, abort, flash, redirect, render_template, request,
-                   url_for)
+                   send_file, url_for)
 from flask_login import (LoginManager, current_user, login_required,
                          login_user, logout_user)
 
@@ -379,16 +380,18 @@ def admin_delete_entry(entry_id):
 
 # ---------- Помесячный факт ----------
 
-@app.route('/monthly')
-@login_required
-def monthly():
-    ym = request.args.get('month', '')
+def _parse_month(raw):
     try:
-        year, month = map(int, ym.split('-'))
+        year, month = map(int, raw.split('-'))
         assert 1 <= month <= 12
+        return year, month
     except (ValueError, AssertionError):
         today = date.today()
-        year, month = today.year, today.month
+        return today.year, today.month
+
+
+def _monthly_data(year, month):
+    """Средняя занятость по факту (4 последние недели месяца, пропуски = 0)."""
     weeks = month_mondays(year, month)
     entries = (Participation.query
                .filter(Participation.kind == 'fact',
@@ -397,19 +400,56 @@ def monthly():
     for e in entries:
         key = (e.user_id, e.project_id)
         sums[key] = sums.get(key, 0) + e.percent
-    avg = {k: round(v / 4) for k, v in sums.items()}  # недостающие недели = 0
+    avg = {k: round(v / 4) for k, v in sums.items()}
     users = User.query.filter_by(active=True).order_by(User.username).all()
     projects = Project.query.filter_by(active=True).order_by(Project.name).all()
+    return users, projects, avg, weeks
+
+
+@app.route('/monthly')
+@login_required
+def monthly():
+    year, month = _parse_month(request.args.get('month', ''))
+    users, projects, avg, weeks = _monthly_data(year, month)
     prev_month = date(year, month, 1) - timedelta(days=1)
-    if month == 12:
-        next_month = date(year + 1, 1, 1)
-    else:
-        next_month = date(year, month + 1, 1)
+    next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
     return render_template('monthly.html', users=users, projects=projects,
                            avg=avg, weeks=weeks, year=year, month=month,
                            month_name=MONTH_NAMES[month - 1],
+                           ym=f'{year:04d}-{month:02d}',
                            prev_ym=f'{prev_month.year:04d}-{prev_month.month:02d}',
                            next_ym=f'{next_month.year:04d}-{next_month.month:02d}')
+
+
+@app.route('/monthly/export')
+@login_required
+def monthly_export():
+    """Выгрузка помесячного факта в XLSX (нулевые значения — пустые ячейки)."""
+    import openpyxl
+    year, month = _parse_month(request.args.get('month', ''))
+    users, projects, avg, weeks = _monthly_data(year, month)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Факт'
+    ws.append(['Пользователь'] + [p.name for p in projects])
+    for u in users:
+        ws.append([u.username] + [(avg.get((u.id, p.id), 0) or None)
+                                  for p in projects])
+    ws.append([])
+    ws.append(['Методика: среднее по факту за 4 последние недели месяца: '
+               + ', '.join(w.strftime('%d.%m.%Y') for w in weeks)
+               + '. Отсутствие данных = 0.'])
+    for col in ws.columns:  # автоширина
+        width = max(len(str(c.value)) if c.value is not None else 0
+                    for c in col) + 2
+        ws.column_dimensions[col[0].column_letter].width = min(width, 50)
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return send_file(
+        bio, as_attachment=True,
+        download_name=f'fact_{year:04d}_{month:02d}.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
 # ---------- Админка: пользователи ----------
