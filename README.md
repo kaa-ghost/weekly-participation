@@ -56,3 +56,40 @@ Python 3.11+, Flask 3, Flask-SQLAlchemy (SQLite), Flask-Login, Bootstrap 5 (CDN)
 приложение со своей облачной БД и логином, даст ссылку вида
 `abc.ok.kimi.link`. Готовый Flask-код туда не импортируется,
 сайт будет пересобран на стеке Kimi.
+
+## Версия с PostgreSQL
+
+Эта версия использует PostgreSQL при заданной переменной окружения `DATABASE_URL`
+(без неё локально работает SQLite, удобно для разработки).
+
+### Render (база создаётся автоматически)
+
+1. Удалите старый веб-сервис (данные в нём всё равно эфемерные) и создайте
+   **новый** Web Service из этого репозитория — Render по `render.yaml`
+   поднимет и приложение, и базу `weekly-db`, и свяжет их.
+2. Либо вручную: *New → PostgreSQL* → скопируйте *Internal Database URL* →
+   в веб-сервисе *Environment* добавьте `DATABASE_URL` со этим значением
+   → *Manual Deploy*.
+
+### Локально с Docker
+
+    docker run --name weekly-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=weekly -p 5432:5432 -d postgres:16
+    export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/weekly
+    python app.py
+
+Теперь данные (пользователи, проекты, записи) сохраняются между деплоями.
+
+### Docker (приложение + PostgreSQL одной командой)
+
+    docker compose up --build
+
+Приложение будет на http://localhost:8000 (admin / admin123).
+База в именованном томе `pgdata` — данные сохраняются между перезапусками.
+
+Только образ приложения (без compose):
+
+    docker build -t weekly-app .
+    docker run -p 8000:8000 -e SECRET_KEY=secret -e ADMIN_PASSWORD=admin123 \
+      -e DATABASE_URL=postgresql://user:pass@host:5432/weekly weekly-app
+
+Образ не содержит БД — PostgreSQL подключается через DATABASE_URL.
