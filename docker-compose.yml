@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: weekly
+      POSTGRES_USER: weekly
+      POSTGRES_PASSWORD: weekly
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weekly"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      SECRET_KEY: change-me
+      ADMIN_PASSWORD: admin123
+      DATABASE_URL: postgresql://weekly:weekly@db:5432/weekly
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

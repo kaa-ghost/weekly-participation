@@ -12,7 +12,12 @@ from models import Project, Participation, User, current_week_start, db
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
+
+# PostgreSQL через переменную DATABASE_URL; локально без неё — SQLite
+db_url = os.environ.get('DATABASE_URL', '')
+if db_url.startswith('postgres://'):  # Render выдаёт старый префикс
+    db_url = 'postgresql://' + db_url[len('postgres://'):]
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url or 'sqlite:///app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
