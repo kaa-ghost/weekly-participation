@@ -8,7 +8,8 @@ from flask import (Flask, abort, flash, redirect, render_template, request,
 from flask_login import (LoginManager, current_user, login_required,
                          login_user, logout_user)
 
-from models import Project, Participation, User, current_week_start, db
+from models import Group, Project, Participation, User, current_week_start, db
+from sqlalchemy import inspect
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'change-me-in-production')
@@ -47,6 +48,44 @@ def admin_required(fn):
     return wrapper
 
 
+def manager_required(fn):
+    """Доступ: администратор или тимлид."""
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if (not current_user.is_authenticated
+                or not (current_user.is_admin or current_user.is_teamlead)):
+            abort(403)
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def visible_users():
+    """Пользователи, которых текущий пользователь видит в сводке."""
+    if current_user.is_admin:
+        return User.query.filter_by(active=True).order_by(User.name, User.username).all()
+    if current_user.is_teamlead and current_user.group_id:
+        return (User.query
+                .filter_by(group_id=current_user.group_id, active=True)
+                .order_by(User.name, User.username).all())
+    return [current_user]
+
+
+def manageable_user(user_id):
+    """Пользователь, за которого текущий менеджер может вносить данные."""
+    u = db.session.get(User, user_id) if user_id else None
+    if u is None:
+        return None
+    if current_user.is_admin:
+        return u
+    if (current_user.is_teamlead and not u.is_admin
+            and u.group_id and u.group_id == current_user.group_id):
+        return u
+    return None
+
+
 def month_mondays(year, month):
     """До 4 последних понедельников месяца (недели отчёта для помесячного факта)."""
     first = date(year, month, 1)
@@ -81,17 +120,18 @@ def register():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
+        name = request.form.get('name', '').strip()
+        email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
         confirm = request.form.get('confirm', '')
-        if not username or not password:
-            flash('Логин и пароль обязательны.', 'danger')
+        if not email or not password:
+            flash('Email и пароль обязательны.', 'danger')
         elif password != confirm:
             flash('Пароли не совпадают.', 'danger')
-        elif User.query.filter_by(username=username).first():
-            flash('Такой логин уже занят.', 'danger')
+        elif User.query.filter_by(email=email).first():
+            flash('Такой email уже зарегистрирован.', 'danger')
         else:
-            user = User(username=username)
+            user = User(username=email, email=email, name=name)
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
@@ -105,11 +145,11 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard'))
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
+        email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
-        user = User.query.filter_by(username=username).first()
+        user = User.query.filter_by(email=email).first()
         if user is None or not user.check_password(password):
-            flash('Неверный логин или пароль.', 'danger')
+            flash('Неверный email или пароль.', 'danger')
         elif not user.active:
             flash('Учётная запись заблокирована.', 'danger')
         else:
@@ -303,7 +343,7 @@ def summary():
             cell['fact'] = e
         elif e.week_start == plan_week and e.kind == 'plan':
             cell['plan'] = e
-    users = User.query.filter_by(active=True).order_by(User.username).all()
+    users = visible_users()
     projects = Project.query.filter_by(active=True).order_by(Project.name).all()
     fact_totals = {u.id: 0 for u in users}
     plan_totals = {u.id: 0 for u in users}
@@ -320,20 +360,22 @@ def summary():
                            plan_week_end=plan_week + timedelta(days=6),
                            week=fact_week.isoformat(),
                            prev_week=(fact_week - timedelta(days=7)).isoformat(),
-                           next_week=(fact_week + timedelta(days=7)).isoformat())
+                           next_week=(fact_week + timedelta(days=7)).isoformat(),
+                           is_manager=(current_user.is_admin
+                                       or current_user.is_teamlead))
 
 
 @app.route('/admin/fact/copy', methods=['POST'])
-@admin_required
+@manager_required
 def admin_copy_fact():
-    """Админ копирует план текущей недели в её факт за выбранного пользователя."""
-    user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    """Менеджер копирует план недели в её факт за выбранного пользователя."""
+    user = manageable_user(request.form.get('user_id', type=int))
     week = selected_week()
     if user is None:
-        flash('Пользователь не найден.', 'danger')
+        flash('Пользователь не найден или недоступен.', 'danger')
     else:
         count, skipped = _copy_plan_to_fact(user.id, week)
-        msg = f'{user.username}: скопировано из плана в факт — {count}.'
+        msg = f'{user.display_name}: скопировано из плана в факт — {count}.'
         if skipped:
             msg += f' Пропущено: {skipped}.'
         flash(msg, 'info')
@@ -341,42 +383,44 @@ def admin_copy_fact():
 
 
 @app.route('/admin/entries', methods=['POST'])
-@admin_required
+@manager_required
 def admin_add_entry():
-    """Админ вводит/меняет факт или план за любого пользователя."""
+    """Менеджер вводит/меняет факт или план за доступного пользователя."""
     kind = request.form.get('kind', 'fact')
     if kind not in KIND_LABELS:
         kind = 'fact'
-    user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    user = manageable_user(request.form.get('user_id', type=int))
     week = selected_week()
     if user is None:
-        flash('Пользователь не найден.', 'danger')
+        flash('Пользователь не найден или недоступен.', 'danger')
     else:
         ok, msg, cat = _save_entry(user.id,
                                    request.form.get('project_id', type=int),
                                    request.form.get('percent', type=int), kind, week)
-        flash(f'{user.username}: {msg}', cat)
+        flash(f'{user.display_name}: {msg}', cat)
     return redirect(url_for('summary', week=week.isoformat()))
 
 
 @app.route('/admin/plan/copy', methods=['POST'])
-@admin_required
+@manager_required
 def admin_copy_plan():
-    """Админ копирует факт выбранной недели в план следующей за выбранного пользователя."""
-    user = db.session.get(User, request.form.get('user_id', type=int) or 0)
+    """Менеджер копирует факт выбранной недели в план следующей за выбранного пользователя."""
+    user = manageable_user(request.form.get('user_id', type=int))
     week = selected_week()
     if user is None:
-        flash('Пользователь не найден.', 'danger')
+        flash('Пользователь не найден или недоступен.', 'danger')
     else:
         count = _copy_fact_to_plan(user.id, week)
-        flash(f'{user.username}: скопировано записей — {count}.', 'info')
+        flash(f'{user.display_name}: скопировано записей — {count}.', 'info')
     return redirect(url_for('summary', week=week.isoformat()))
 
 
 @app.route('/admin/entries/<int:entry_id>/delete', methods=['POST'])
-@admin_required
+@manager_required
 def admin_delete_entry(entry_id):
     entry = db.session.get(Participation, entry_id) or abort(404)
+    if manageable_user(entry.user_id) is None:
+        abort(403)
     db.session.delete(entry)
     db.session.commit()
     flash('Запись удалена.', 'info')
@@ -466,48 +510,82 @@ def admin_users():
     return render_template('admin/users.html', users=users)
 
 
+def _user_form_data(user):
+    """Собирает данные формы пользователя (create/edit общая логика)."""
+    return {
+        'name': request.form.get('name', '').strip(),
+        'email': request.form.get('email', '').strip().lower(),
+        'password': request.form.get('password', ''),
+        'is_admin': bool(request.form.get('is_admin')),
+        'is_teamlead': bool(request.form.get('is_teamlead')),
+        'active': bool(request.form.get('active')),
+        'group_id': request.form.get('group_id', type=int) or None,
+    }
+
+
+def _email_taken(email, exclude_id=None):
+    q = User.query.filter_by(email=email)
+    if exclude_id:
+        q = q.filter(User.id != exclude_id)
+    return q.first() is not None
+
+
+def _apply_group_leader(user):
+    """Если пользователь — тимлид группы без лидера, назначаем его лидером."""
+    if user.is_teamlead and user.group_id:
+        group = db.session.get(Group, user.group_id)
+        if group and not group.leader_id:
+            group.leader_id = user.id
+
+
 @app.route('/admin/users/create', methods=['GET', 'POST'])
 @admin_required
 def admin_user_create():
+    groups = Group.query.filter_by(active=True).order_by(Group.name).all()
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '')
-        is_admin = bool(request.form.get('is_admin'))
-        if not username or not password:
-            flash('Логин и пароль обязательны.', 'danger')
-        elif User.query.filter_by(username=username).first():
-            flash('Такой логин уже занят.', 'danger')
+        d = _user_form_data(None)
+        if not d['email'] or not d['password']:
+            flash('Email и пароль обязательны.', 'danger')
+        elif _email_taken(d['email']):
+            flash('Такой email уже зарегистрирован.', 'danger')
         else:
-            user = User(username=username, is_admin=is_admin)
-            user.set_password(password)
+            user = User(username=d['email'], email=d['email'], name=d['name'],
+                        is_admin=d['is_admin'], is_teamlead=d['is_teamlead'],
+                        group_id=d['group_id'])
+            user.set_password(d['password'])
             db.session.add(user)
+            db.session.flush()
+            _apply_group_leader(user)
             db.session.commit()
             flash('Пользователь создан.', 'success')
             return redirect(url_for('admin_users'))
-    return render_template('admin/user_form.html', user=None)
+    return render_template('admin/user_form.html', user=None, groups=groups)
 
 
 @app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
 @admin_required
 def admin_user_edit(user_id):
     user = db.session.get(User, user_id) or abort(404)
+    groups = Group.query.filter_by(active=True).order_by(Group.name).all()
     if request.method == 'POST':
-        new_name = request.form.get('username', '').strip()
-        taken = User.query.filter(User.username == new_name,
-                                  User.id != user.id).first()
-        if not new_name or taken:
-            flash('Логин пустой или уже занят.', 'danger')
+        d = _user_form_data(user)
+        if not d['email'] or _email_taken(d['email'], exclude_id=user.id):
+            flash('Email пустой или уже зарегистрирован.', 'danger')
         else:
-            user.username = new_name
-            user.is_admin = bool(request.form.get('is_admin'))
-            user.active = bool(request.form.get('active'))
-            password = request.form.get('password', '')
-            if password:
-                user.set_password(password)
+            user.email = d['email']
+            user.username = d['email']
+            user.name = d['name']
+            user.is_admin = d['is_admin']
+            user.is_teamlead = d['is_teamlead']
+            user.active = d['active']
+            user.group_id = d['group_id']
+            if d['password']:
+                user.set_password(d['password'])
+            _apply_group_leader(user)
             db.session.commit()
             flash('Пользователь обновлён.', 'success')
             return redirect(url_for('admin_users'))
-    return render_template('admin/user_form.html', user=user)
+    return render_template('admin/user_form.html', user=user, groups=groups)
 
 
 @app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
@@ -579,17 +657,196 @@ def admin_project_delete(project_id):
     return redirect(url_for('admin_projects'))
 
 
+# ---------- Справочник групп (админ) ----------
+
+@app.route('/admin/groups')
+@admin_required
+def admin_groups():
+    groups = Group.query.order_by(Group.name).all()
+    return render_template('admin/groups.html', groups=groups)
+
+
+@app.route('/admin/groups/create', methods=['GET', 'POST'])
+@admin_required
+def admin_group_create():
+    leaders = (User.query.filter_by(is_teamlead=True, active=True)
+               .order_by(User.name, User.username).all())
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        leader_id = request.form.get('leader_id', type=int) or None
+        if not name:
+            flash('Название обязательно.', 'danger')
+        elif Group.query.filter_by(name=name).first():
+            flash('Группа с таким названием уже есть.', 'danger')
+        else:
+            group = Group(name=name, active=bool(request.form.get('active', True)))
+            if leader_id and db.session.get(User, leader_id):
+                group.leader_id = leader_id
+            db.session.add(group)
+            db.session.flush()
+            _assign_leader_group(group)
+            db.session.commit()
+            flash('Группа создана.', 'success')
+            return redirect(url_for('admin_groups'))
+    return render_template('admin/group_form.html', group=None, leaders=leaders)
+
+
+@app.route('/admin/groups/<int:group_id>/edit', methods=['GET', 'POST'])
+@admin_required
+def admin_group_edit(group_id):
+    group = db.session.get(Group, group_id) or abort(404)
+    leaders = (User.query.filter_by(is_teamlead=True, active=True)
+               .order_by(User.name, User.username).all())
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        taken = Group.query.filter(Group.name == name, Group.id != group.id).first()
+        if not name or taken:
+            flash('Название пустое или уже занято.', 'danger')
+        else:
+            group.name = name
+            group.active = bool(request.form.get('active'))
+            group.leader_id = request.form.get('leader_id', type=int) or None
+            _assign_leader_group(group)
+            db.session.commit()
+            flash('Группа обновлена.', 'success')
+            return redirect(url_for('admin_groups'))
+    return render_template('admin/group_form.html', group=group, leaders=leaders)
+
+
+def _assign_leader_group(group):
+    """Лидер группы автоматически становится её участником."""
+    if group.leader_id:
+        leader = db.session.get(User, group.leader_id)
+        if leader and not leader.group_id:
+            leader.group_id = group.id
+
+
+@app.route('/admin/groups/<int:group_id>/delete', methods=['POST'])
+@admin_required
+def admin_group_delete(group_id):
+    group = db.session.get(Group, group_id) or abort(404)
+    if group.members:
+        flash('Нельзя удалить группу с участниками — сначала переведите их.', 'danger')
+    else:
+        db.session.delete(group)
+        db.session.commit()
+        flash('Группа удалена.', 'info')
+    return redirect(url_for('admin_groups'))
+
+
+# ---------- Кабинет тимлида ----------
+
+def _teamlead_group():
+    """Группа текущего тимлида (или None)."""
+    if not (current_user.is_teamlead and current_user.group_id):
+        return None
+    return db.session.get(Group, current_user.group_id)
+
+
+@app.route('/teamlead/group')
+@login_required
+def teamlead_group():
+    group = _teamlead_group()
+    if group is None:
+        flash('Вам не назначена группа. Обратитесь к администратору.', 'warning')
+        return redirect(url_for('dashboard'))
+    members = (User.query.filter_by(group_id=group.id)
+               .order_by(User.name, User.username).all())
+    return render_template('teamlead/group.html', group=group, members=members)
+
+
+@app.route('/teamlead/members/create', methods=['POST'])
+@login_required
+def teamlead_member_create():
+    group = _teamlead_group()
+    if group is None:
+        abort(403)
+    name = request.form.get('name', '').strip()
+    email = request.form.get('email', '').strip().lower()
+    password = request.form.get('password', '')
+    if not email or not password:
+        flash('Email и пароль обязательны.', 'danger')
+    elif _email_taken(email):
+        flash('Такой email уже зарегистрирован.', 'danger')
+    else:
+        user = User(username=email, email=email, name=name,
+                    group_id=group.id)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+        flash(f'Участник {user.display_name} добавлен в группу.', 'success')
+    return redirect(url_for('teamlead_group'))
+
+
+@app.route('/teamlead/members/<int:user_id>/edit', methods=['GET', 'POST'])
+@login_required
+def teamlead_member_edit(user_id):
+    group = _teamlead_group()
+    if group is None:
+        abort(403)
+    member = db.session.get(User, user_id) or abort(404)
+    if (member.group_id != group.id or member.is_admin
+            or (member.is_teamlead and member.id != current_user.id)):
+        abort(403)
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        name = request.form.get('name', '').strip()
+        password = request.form.get('password', '')
+        if not email or _email_taken(email, exclude_id=member.id):
+            flash('Email пустой или уже зарегистрирован.', 'danger')
+        else:
+            member.email = email
+            member.username = email
+            member.name = name
+            member.active = bool(request.form.get('active'))
+            if password:
+                member.set_password(password)
+            db.session.commit()
+            flash('Участник обновлён.', 'success')
+            return redirect(url_for('teamlead_group'))
+    return render_template('teamlead/member_form.html', member=member)
+
+
 # ---------- Инициализация ----------
 
+def migrate():
+    """Накатывает изменения схемы на существующую БД (email, name, группы)."""
+    insp = inspect(db.engine)
+    cols = {c['name'] for c in insp.get_columns('users')}
+    with db.engine.begin() as conn:
+        if 'email' not in cols:
+            conn.execute(db.text('ALTER TABLE users ADD COLUMN email VARCHAR(255)'))
+        if 'name' not in cols:
+            conn.execute(db.text('ALTER TABLE users ADD COLUMN name VARCHAR(128)'))
+        if 'is_teamlead' not in cols:
+            conn.execute(db.text('ALTER TABLE users ADD COLUMN is_teamlead BOOLEAN NOT NULL DEFAULT FALSE'))
+        if 'group_id' not in cols:
+            conn.execute(db.text('ALTER TABLE users ADD COLUMN group_id INTEGER'))
+    db.session.execute(db.text(
+        "UPDATE users SET email = CASE WHEN username LIKE '%@%' THEN username "
+        "ELSE username || '@example.local' END WHERE email IS NULL OR email = ''"))
+    db.session.execute(db.text(
+        "UPDATE users SET name = username WHERE name IS NULL OR name = ''"))
+    db.session.execute(db.text(
+        "UPDATE users SET username = email WHERE username IS NULL OR username = ''"))
+    db.session.commit()
+    with db.engine.begin() as conn:
+        conn.execute(db.text(
+            'CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email)'))
+
+
 def init_db():
-    """Создаёт таблицы и администратора при старте (и под gunicorn тоже)."""
+    """Создаёт таблицы, мигрирует схему и создаёт администратора при старте."""
     db.create_all()
+    migrate()
     if not User.query.filter_by(is_admin=True).first():
-        admin = User(username='admin', is_admin=True)
+        email = os.environ.get('ADMIN_EMAIL', 'admin@example.com').lower()
+        admin = User(username=email, email=email, name='Администратор',
+                     is_admin=True)
         admin.set_password(os.environ.get('ADMIN_PASSWORD', 'admin'))
         db.session.add(admin)
         db.session.commit()
-        print('Создан администратор: admin (смените пароль!)')
+        print(f'Создан администратор: {email} (смените пароль!)')
 
 
 with app.app_context():  # выполняется и при импорте gunicorn'ом

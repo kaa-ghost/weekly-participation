@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Изменить участника{% endblock %}
+{% block content %}
+<h4>Изменить участника</h4>
+<form method="post" class="card"><div class="card-body">
+  <div class="mb-3"><label class="form-label">Имя</label>
+    <input name="name" class="form-control" value="{{ member.name or '' }}"></div>
+  <div class="mb-3"><label class="form-label">Email (логин)</label>
+    <input type="email" name="email" class="form-control" value="{{ member.email }}" required></div>
+  <div class="mb-3"><label class="form-label">Пароль <small class="text-muted">(пусто — не менять)</small></label>
+    <input type="password" name="password" class="form-control"></div>
+  <div class="form-check mb-3">
+    <input type="checkbox" name="active" class="form-check-input" id="active" {% if member.active %}checked{% endif %}>
+    <label class="form-check-label" for="active">Активен</label></div>
+  <button class="btn btn-primary">Сохранить</button>
+  <a class="btn btn-outline-secondary" href="{{ url_for('teamlead_group') }}">Отмена</a>
+</div></form>
+{% endblock %}

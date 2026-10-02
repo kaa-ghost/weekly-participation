@@ -3,25 +3,27 @@
 {% block content %}
 <h4>{{ 'Изменить' if user else 'Создать' }} пользователя</h4>
 <form method="post" class="card"><div class="card-body">
-  <div class="mb-3">
-    <label class="form-label">Логин</label>
-    <input name="username" class="form-control" value="{{ user.username if user else '' }}" required>
-  </div>
-  <div class="mb-3">
-    <label class="form-label">Пароль {% if user %}<small class="text-muted">(оставьте пустым, чтобы не менять)</small>{% endif %}</label>
-    <input type="password" name="password" class="form-control" {% if not user %}required{% endif %}>
-  </div>
+  <div class="mb-3"><label class="form-label">Имя</label>
+    <input name="name" class="form-control" value="{{ user.name if user else '' }}"></div>
+  <div class="mb-3"><label class="form-label">Email (логин)</label>
+    <input type="email" name="email" class="form-control" value="{{ user.email if user else '' }}" required></div>
+  <div class="mb-3"><label class="form-label">Пароль {% if user %}<small class="text-muted">(пусто — не менять)</small>{% endif %}</label>
+    <input type="password" name="password" class="form-control" {% if not user %}required{% endif %}></div>
   <div class="form-check mb-2">
-    <input type="checkbox" name="is_admin" class="form-check-input" id="is_admin"
-           {% if user and user.is_admin %}checked{% endif %}>
-    <label class="form-check-label" for="is_admin">Администратор</label>
-  </div>
+    <input type="checkbox" name="is_admin" class="form-check-input" id="is_admin" {% if user and user.is_admin %}checked{% endif %}>
+    <label class="form-check-label" for="is_admin">Администратор</label></div>
+  <div class="form-check mb-2">
+    <input type="checkbox" name="is_teamlead" class="form-check-input" id="is_teamlead" {% if user and user.is_teamlead %}checked{% endif %}>
+    <label class="form-check-label" for="is_teamlead">Тимлид</label></div>
+  <div class="mb-3"><label class="form-label">Группа (для тимлида — управляемая группа)</label>
+    <select name="group_id" class="form-select">
+      <option value="">— без группы —</option>
+      {% for g in groups %}<option value="{{ g.id }}" {% if user and user.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}
+    </select></div>
   {% if user %}
   <div class="form-check mb-3">
-    <input type="checkbox" name="active" class="form-check-input" id="active"
-           {% if user.active %}checked{% endif %}>
-    <label class="form-check-label" for="active">Активен (может входить)</label>
-  </div>
+    <input type="checkbox" name="active" class="form-check-input" id="active" {% if user.active %}checked{% endif %}>
+    <label class="form-check-label" for="active">Активен</label></div>
   {% endif %}
   <button class="btn btn-primary">Сохранить</button>
   <a class="btn btn-outline-secondary" href="{{ url_for('admin_users') }}">Отмена</a>
