@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Группы{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Группы</h4>
+  <a class="btn btn-primary btn-sm" href="{{ url_for('admin_group_create') }}">+ Создать</a>
+</div>
+<table class="table table-striped align-middle">
+  <thead><tr><th>Название</th><th>Тимлид</th><th>Участников</th><th>Статус</th><th></th></tr></thead>
+  <tbody>
+  {% for g in groups %}
+    <tr>
+      <td>{{ g.name }}</td>
+      <td>{{ g.leader.display_name if g.leader else '— не назначен —' }}</td>
+      <td>{{ g.members|length }}</td>
+      <td>{% if g.active %}<span class="badge bg-success">активна</span>{% else %}<span class="badge bg-secondary">архив</span>{% endif %}</td>
+      <td class="text-end">
+        <a class="btn btn-outline-primary btn-sm" href="{{ url_for('admin_group_edit', group_id=g.id) }}">Изменить</a>
+        <form method="post" class="d-inline" action="{{ url_for('admin_group_delete', group_id=g.id) }}"
+              onsubmit="return confirm('Удалить группу {{ g.name }}?')">
+          <button class="btn btn-outline-danger btn-sm">Удалить</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

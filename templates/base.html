@@ -16,12 +16,16 @@
       <a class="nav-link" href="{{ url_for('dashboard') }}">Моя неделя</a>
       <a class="nav-link" href="{{ url_for('summary') }}">Сводка</a>
       <a class="nav-link" href="{{ url_for('monthly') }}">Месяц</a>
+      {% if current_user.is_teamlead %}
+      <a class="nav-link" href="{{ url_for('teamlead_group') }}">Моя группа</a>
+      {% endif %}
       {% if current_user.is_admin %}
       <a class="nav-link" href="{{ url_for('admin_users') }}">Пользователи</a>
+      <a class="nav-link" href="{{ url_for('admin_groups') }}">Группы</a>
       <a class="nav-link" href="{{ url_for('admin_projects') }}">Проекты</a>
       {% endif %}
     </div>
-    <span class="navbar-text me-3">{{ current_user.username }}</span>
+    <span class="navbar-text me-3">{{ current_user.display_name }}</span>
     <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Выйти</a>
     {% endif %}
   </div>

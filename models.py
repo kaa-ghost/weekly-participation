@@ -7,12 +7,32 @@ from werkzeug.security import check_password_hash, generate_password_hash
 db = SQLAlchemy()
 
 
+class Group(db.Model):
+    __tablename__ = 'groups'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), unique=True, nullable=False)
+    leader_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    members = db.relationship('User', backref='group',
+                              foreign_keys='User.group_id')
+
+    @property
+    def leader(self):
+        return db.session.get(User, self.leader_id) if self.leader_id else None
+
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    username = db.Column(db.String(64), unique=True, nullable=False, index=True)  # legacy, = email
+    email = db.Column(db.String(255), unique=True, nullable=True, index=True)     # логин в систему
+    name = db.Column(db.String(128))                                              # отображаемое имя
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    is_teamlead = db.Column(db.Boolean, nullable=False, default=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
     active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
@@ -28,6 +48,18 @@ class User(UserMixin, db.Model):
     @property
     def is_active(self):
         return self.active
+
+    @property
+    def display_name(self):
+        return self.name or self.username
+
+    @property
+    def role_label(self):
+        if self.is_admin:
+            return 'администратор'
+        if self.is_teamlead:
+            return 'тимлид'
+        return 'пользователь'
 
 
 class Project(db.Model):

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Изменить' if group else 'Создать' }} группу{% endblock %}
+{% block content %}
+<h4>{{ 'Изменить' if group else 'Создать' }} группу</h4>
+<form method="post" class="card"><div class="card-body">
+  <div class="mb-3"><label class="form-label">Название</label>
+    <input name="name" class="form-control" value="{{ group.name if group else '' }}" required></div>
+  <div class="mb-3"><label class="form-label">Тимлид</label>
+    <select name="leader_id" class="form-select">
+      <option value="">— не назначен —</option>
+      {% for l in leaders %}<option value="{{ l.id }}" {% if group and group.leader_id == l.id %}selected{% endif %}>{{ l.display_name }}</option>{% endfor %}
+    </select>
+    <small class="text-muted">В списке — пользователи с уровнем «тимлид». Назначение лидера добавляет его в группу.</small></div>
+  <div class="form-check mb-3">
+    <input type="checkbox" name="active" class="form-check-input" id="active" {% if not group or group.active %}checked{% endif %}>
+    <label class="form-check-label" for="active">Активна</label></div>
+  <button class="btn btn-primary">Сохранить</button>
+  <a class="btn btn-outline-secondary" href="{{ url_for('admin_groups') }}">Отмена</a>
+</div></form>
+{% endblock %}

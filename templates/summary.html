@@ -17,7 +17,7 @@
 <p class="text-muted">Факт: {{ fact_week.strftime('%d.%m.%Y') }} — {{ fact_week_end.strftime('%d.%m.%Y') }}
   · План: {{ plan_week.strftime('%d.%m.%Y') }} — {{ plan_week_end.strftime('%d.%m.%Y') }}</p>
 
-{% if current_user.is_admin %}
+{% if is_manager %}
 <div class="card mb-4">
   <div class="card-body">
     <h6 class="card-title">Внести данные (от имени администратора)</h6>
@@ -118,7 +118,7 @@ document.getElementById('copyUser').addEventListener('change', function () {
   <tbody>
   {% for u in users %}
     <tr>
-      <th class="text-start">{{ u.username }}</th>
+      <th class="text-start">{{ u.display_name }}</th>
       {% for p in projects %}
         {% set cell = matrix.get((u.id, p.id), {}) %}
         {% set e = cell.get('plan') %}
@@ -126,7 +126,7 @@ document.getElementById('copyUser').addEventListener('change', function () {
           {% if e %}
             <div class="d-flex flex-column align-items-center gap-1">
               <span class="fw-bold">{{ e.percent }}%</span>
-              {% if current_user.is_admin %}
+              {% if is_manager %}
               <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
                     onsubmit="return confirm('Удалить план {{ u.username }} / {{ p.name }}?')">
                 <input type="hidden" name="week" value="{{ week }}">
@@ -141,7 +141,7 @@ document.getElementById('copyUser').addEventListener('change', function () {
           {% if e %}
             <div class="d-flex flex-column align-items-center gap-1">
               <span class="fw-bold">{{ e.percent }}%</span>
-              {% if current_user.is_admin %}
+              {% if is_manager %}
               <form method="post" action="{{ url_for('admin_delete_entry', entry_id=e.id) }}"
                     onsubmit="return confirm('Удалить факт {{ u.username }} / {{ p.name }}?')">
                 <input type="hidden" name="week" value="{{ week }}">
